@@ -92,7 +92,7 @@ Github-Repo-Analyzer/
 
 🧠 Integrate LLMs for smarter fix suggestions
 
-🤝 Contributing
+## 🤝 Contributing
 
 Contributions are always welcome! 🎉
 
