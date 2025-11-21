@@ -9,11 +9,12 @@ log = logging.getLogger(__name__)
 
 class FetcherAgent:
     """
-    Fetch file contents (text files) using PyGithub. Skips binaries and very large files.
+    Fetch file contents using PyGithub (decoded as UTF-8 or fallback).
+    Skips binary-like files and files bigger than MAX_BYTES.
     """
 
     BINARY_EXT = (".png", ".jpg", ".jpeg", ".gif", ".zip", ".tar.gz", ".gz", ".ico", ".pdf", ".exe", ".dll")
-    MAX_BYTES = 200_000  # skip files larger than ~200 KB by default
+    MAX_BYTES = 250_000  # default 250 KB
     MAX_FILES = 200
 
     def __init__(self, token: Optional[str] = None):
@@ -23,8 +24,14 @@ class FetcherAgent:
         else:
             self.gh = Github()
 
-    def fetch(self, owner: str, repo: str, file_paths: List[str], branch: str, max_files: Optional[int] = None) -> Dict[str, Any]:
-        repo_obj = self.gh.get_repo(f"{owner}/{repo}")
+    def fetch(self, owner: str, repo: str, file_paths: List[str], branch: str,
+              max_files: Optional[int] = None) -> Dict[str, Any]:
+        try:
+            repo_obj = self.gh.get_repo(f"{owner}/{repo}")
+        except Exception as e:
+            log.exception("Fetcher: cannot get repo object")
+            return {"status": "error", "error": str(e)}
+
         file_contents: Dict[str, str] = {}
         details: Dict[str, Any] = {}
         count = 0
@@ -53,6 +60,6 @@ class FetcherAgent:
                 details[path] = {"size_bytes": size, "fetched": True}
                 count += 1
             except Exception as e:
-                log.exception("fetch error for %s", path)
+                log.exception("Fetcher error for %s: %s", path, e)
                 details[path] = {"error": str(e)}
         return {"status": "ok", "files": file_contents, "details": details, "fetched_count": len(file_contents)}

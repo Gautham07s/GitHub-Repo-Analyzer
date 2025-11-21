@@ -1,4 +1,5 @@
 # agents/validator.py
+from typing import Optional
 import logging
 from typing import Dict, Any, Tuple, List
 import ast
@@ -12,12 +13,14 @@ log = logging.getLogger(__name__)
 
 class ValidatorAgent:
     """
-    For .py files: check syntax (ast.parse), run flake8 and pylint (via subprocess).
-    For other files: basic checks (e.g., non-empty).
+    Validate code files:
+     - For Python: syntax check via ast.parse, flake8 and pylint via subprocess (python -m ...).
+     - For other files: basic non-empty check.
+    Returns {'status':'ok','validations': {...}, 'summary': str}
     """
 
-    def __init__(self):
-        self.python = sys.executable  # use current python interpreter to run flake8/pylint
+    def __init__(self, python_exe: Optional[str] = None):
+        self.python = python_exe or sys.executable
 
     def _run_flake8(self, source: str, hint: str) -> Tuple[int, List[str], str]:
         with tempfile.TemporaryDirectory() as td:
@@ -25,12 +28,15 @@ class ValidatorAgent:
             with open(p, "w", encoding="utf-8") as fh:
                 fh.write(source)
             try:
-                proc = subprocess.run([self.python, "-m", "flake8", p, "--format=%(row)d:%(col)d:%(code)s:%(text)s"], capture_output=True, text=True)
+                proc = subprocess.run([self.python, "-m", "flake8", p, "--format=%(row)d:%(col)d:%(code)s:%(text)s"],
+                                      capture_output=True, text=True)
                 out = proc.stdout.strip()
                 lines = [l for l in out.splitlines() if l.strip()]
                 return proc.returncode, lines, proc.stderr.strip()
             except FileNotFoundError:
                 return 0, [], "flake8 not installed"
+            except Exception as e:
+                return 1, [], str(e)
 
     def _run_pylint(self, source: str, hint: str) -> Tuple[int, Any, str]:
         with tempfile.TemporaryDirectory() as td:
@@ -38,7 +44,8 @@ class ValidatorAgent:
             with open(p, "w", encoding="utf-8") as fh:
                 fh.write(source)
             try:
-                proc = subprocess.run([self.python, "-m", "pylint", p, "--output-format=json", "--score=n"], capture_output=True, text=True, timeout=60)
+                proc = subprocess.run([self.python, "-m", "pylint", p, "--output-format=json", "--score=n"],
+                                      capture_output=True, text=True, timeout=60)
                 out = proc.stdout.strip()
                 items = []
                 if out:
@@ -62,25 +69,46 @@ class ValidatorAgent:
 
     def run(self, files: Dict[str, str]) -> Dict[str, Any]:
         validations: Dict[str, Any] = {}
+        total_files = 0
+        total_syntax_err = 0
+        total_flake_warnings = 0
+        total_pylint_warnings = 0
+
         for path, content in files.items():
-            rec = {"lines": len(content.splitlines()), "chars": len(content)}
+            total_files += 1
+            rec: Dict[str, Any] = {"lines": len(content.splitlines()), "chars": len(content)}
             if path.lower().endswith(".py"):
                 ok, err = self._py_syntax_check(content)
                 rec["syntax_ok"] = ok
                 if not ok:
                     rec["syntax_error"] = err
+                    total_syntax_err += 1
+
                 rc_f8, f8_lines, f8_err = self._run_flake8(content, path.replace("/", "_"))
                 rec["flake8_returncode"] = rc_f8
                 rec["flake8_issues"] = f8_lines
+                if f8_lines:
+                    total_flake_warnings += 1
                 if f8_err:
                     rec["flake8_stderr"] = f8_err
+
                 rc_pl, pl_items, pl_err = self._run_pylint(content, path.replace("/", "_"))
                 rec["pylint_returncode"] = rc_pl
                 rec["pylint_issues"] = pl_items
+                if pl_items:
+                    total_pylint_warnings += 1
                 if pl_err:
                     rec["pylint_stderr"] = pl_err
             else:
-                # generic basic check for text files
                 rec["note"] = "non-python file; basic metadata only"
+
             validations[path] = rec
-        return {"status": "ok", "validations": validations}
+
+        summary_lines = [
+            f"Files analyzed: {total_files}",
+            f"Python syntax errors: {total_syntax_err}",
+            f"Files with flake8 warnings: {total_flake_warnings}",
+            f"Files with pylint warnings: {total_pylint_warnings}"
+        ]
+        summary = " | ".join(summary_lines)
+        return {"status": "ok", "validations": validations, "summary": summary}
